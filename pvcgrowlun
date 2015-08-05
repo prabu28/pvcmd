@@ -1,0 +1,140 @@
+#!/usr/bin/python
+# Program name: pvcgrowlun
+# Purpose: grow a lun on PowerVC
+# Author: Benoit CREAU http://www.chmod666.org
+# Contact: benoit.creau@chmod666.org
+# Disclaimer: This programm is provided "as is". please contact me if you found bugs. Use it at you own risks
+# Last update:  Jul 07, 2015
+# Version: 0.1a 
+# License :
+# This work is licensed under the Creative Commons Attribution-ShareAlike 3.0 Unported License. 
+# To view a copy of this license, visit http://creativecommons.org/licenses/by-sa/3.0/ or send 
+# a letter to Creative Commons, 444 Castro Street, Suite 900, Mountain View, California, 94041, USA. 
+import httplib
+import json
+import os
+import sys, getopt
+import time
+from subprocess import Popen, PIPE
+
+# Function: perform a call to the api
+# For pvcgrowlun we only need GET and POST
+# I'm sure there is a simpler way to do that
+def call_api(type_call, host, api_url, headers, body, normal_response_code, no_response):
+  # Some calls do no return anything
+  no_reponse=0
+  conn=httplib.HTTPSConnection(host)
+  conn.request(type_call, api_url, body, headers)
+  response = conn.getresponse()
+  # GET http call
+  if type_call == "GET":
+    # Case ok
+    if response.status == normal_response_code:
+      raw_response = response.read()
+      conn.close()
+      json_data = json.loads(raw_response)
+      return json_data
+    # Case ko
+    else:
+      raw_response = response.read()
+      conn.close()
+      json_data = json.loads(raw_response)
+      return json_data
+      print "[ERROR] Response code ",response.status
+  # POST http call
+  elif type_call == "POST":
+    print "JSON Body:",body
+    if response.status == normal_response_code:
+      if no_response == 0:
+        raw_response = response.read()
+        conn.close()
+        json_data = json.loads(raw_response)
+        return json_data
+      else:
+        print "[OK] Call successful"
+        conn.close()
+    else:
+      if no_response == 0:
+        raw_response = response.read()
+        conn.close()
+        json_data = json.loads(raw_response)
+        return json_data
+      else:
+        conn.close()
+      print "[ERROR] Response code ",response.status
+
+# Function: authenticating powervc
+# Return a token
+def pvcmd_authenticate(host, headers, user, password):
+  conn=httplib.HTTPSConnection(host)
+  body_auth_header={"auth":{"scope":{"project":{"domain":{"name":"Default"},"name":"ibm-default"}},"identity":{"password":{"user":{"domain":{"name":"Default"},"password":"<PASSWORD>","name": "<USER>"}},"methods":["password"]}}}
+  body_auth_header["auth"]["identity"]["password"]["user"]["password"]=password
+  body_auth_header["auth"]["identity"]["password"]["user"]["name"]=user
+  conn.request("POST", "/powervc/openstack/identity/v3/auth/tokens", json.dumps(body_auth_header), headers)
+  response=conn.getresponse()
+  conn.close()
+  auth_token=response.getheader('X-Subject-Token')
+  return auth_token
+
+# Function: get tenant id
+# Return the tenant id
+def pvcmd_get_tenant_id(host, headers, user, password):
+  all_tenants=call_api("GET", host, "/powervc/openstack/identity/v3/projects",headers,"",200,0)
+  tenant_id=all_tenants["projects"][0]["id"]
+  return tenant_id
+
+# Function: print help
+def pvcmd_print_help():
+  print "pvcgrowlun -v <volume_name> -s <new_size> -p <powervc_host> -u <username> -P <password>"
+  sys.exit(0)
+
+def main(argv):
+
+  # Openstack and PowerVC rest API url
+  powervc_vol="/powervc/openstack/volume/v2/<TENANT_ID>/volumes"
+
+  auth_headers={"Vary": "X-Auth-Token, X-Subject-Token", "Content-Type":"application/json", "Accept":"application/json"}
+
+  try:
+    opts, args=getopt.getopt(argv,"v:s:u:p:P:")
+  except getopt.GetoptError as err:
+    pvcmd_print_help
+    print str(err)
+    sys.exit(2)
+  for opt, arg in opts:
+    if opt in ("-v"):
+      volume_name=arg
+    elif opt in ("-s"):
+      size_of_lun=arg
+    elif opt in ("-p"):
+      powervc_url=arg
+    elif opt in ("-P"):
+      password=arg
+    elif opt in ("-u"):
+      user=arg
+    
+  # Getting the token and building the header with the token
+  token=pvcmd_authenticate(powervc_url,auth_headers,user,password)
+  auth_headers_tok={"X-Auth-Token":token, "Content-Type":"application/json", "Accept":"application/json"}
+  # Retrieving the tenant id this one will be utilized in the script
+  tenant_id=pvcmd_get_tenant_id(powervc_url,auth_headers_tok,user,password)
+
+  # Replacing the tenant id in needed API url
+  powervc_vol="/powervc/openstack/volume/v2/<TENANT_ID>/volumes"
+
+  powervc_vol_replaced=powervc_vol.replace("<TENANT_ID>",tenant_id)
+  all_vols=call_api("GET",powervc_url,powervc_vol_replaced,auth_headers_tok,"",200,0)
+  new_size={ "ibm-extend": { "new_size": 20 } }
+  new_size["ibm-extend"]["new_size"]=int(size_of_lun)
+  # For multivolume image be aware that all data lun will be
+  # grow to the desired size
+  for a_volume in all_vols["volumes"]:
+    if volume_name == a_volume["name"]:
+      volume_id=a_volume["id"]
+      powervc_vol_grow_replaced=powervc_vol_replaced+"/"+volume_id+"/action"
+      print "[info] growing volume",a_volume["name"],"with id",a_volume["id"]
+      grow_vol=call_api("POST",powervc_url,powervc_vol_grow_replaced,auth_headers_tok,json.dumps(new_size),204,1)
+      print grow_vol
+
+if __name__ == "__main__":
+  main(sys.argv[1:])
