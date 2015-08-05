@@ -1,0 +1,262 @@
+#!/usr/bin/python
+# Program name: pvcmkvm
+# Purpose: create a virtual machine with PowerVC rest API
+# Author: Benoit CREAU http://www.chmod666.org
+# Contact: benoit.creau@chmod666.org
+# Disclaimer: This programm is provided "as is". please contact me if you found bugs. Use it at you own risks
+# Last update:  Jul 07, 2015
+# Version: 0.1a 
+# License :
+# This work is licensed under the Creative Commons Attribution-ShareAlike 3.0 Unported License. 
+# To view a copy of this license, visit http://creativecommons.org/licenses/by-sa/3.0/ or send 
+# a letter to Creative Commons, 444 Castro Street, Suite 900, Mountain View, California, 94041, USA. 
+import httplib
+import json
+import os
+import sys, getopt
+import time
+from subprocess import Popen, PIPE
+
+# Function: perform a call to the api
+# For pvcmkvm we only need GET and POST
+# I'm sure there is a simpler way to do that
+def call_api(type_call, host,  api_url, headers, body, normal_response_code,no_response):
+  # Some calls do no return anything
+  no_reponse=0
+  conn=httplib.HTTPSConnection(host)
+  conn.request(type_call, api_url, body, headers)
+  response = conn.getresponse()
+  # GET http call
+  if type_call == "GET":
+    # Case ok
+    if response.status == normal_response_code:
+      raw_response = response.read()
+      conn.close()
+      json_data = json.loads(raw_response)
+      return json_data
+    # Case ko
+    else:
+      raw_response = response.read()
+      conn.close()
+      json_data = json.loads(raw_response)
+      return json_data
+      print "[ERROR] Response code ",response.status
+  # POST http call
+  elif type_call == "POST":
+    print "JSON Body:",body
+    if response.status == normal_response_code:
+      if no_response == 0:
+        raw_response = response.read()
+        conn.close()
+        json_data = json.loads(raw_response)
+        return json_data
+      else:
+        print "[OK] Call successful"
+        conn.close()
+    else:
+      if no_response == 0:
+        raw_response = response.read()
+        conn.close()
+        json_data = json.loads(raw_response)
+        return json_data
+      else:
+        conn.close()
+      print "[ERROR] Response code ",response.status
+
+# Function: authenticating powervc
+# Return a token
+def pvcmd_authenticate(host, headers, user, password):
+  conn=httplib.HTTPSConnection(host)
+  body_auth_header={"auth":{"scope":{"project":{"domain":{"name":"Default"},"name":"ibm-default"}},"identity":{"password":{"user":{"domain":{"name":"Default"},"password":"<PASSWORD>","name": "<USER>"}},"methods":["password"]}}}
+  body_auth_header["auth"]["identity"]["password"]["user"]["password"]=password
+  body_auth_header["auth"]["identity"]["password"]["user"]["name"]=user
+  conn.request("POST", "/powervc/openstack/identity/v3/auth/tokens", json.dumps(body_auth_header), headers)
+  response=conn.getresponse()
+  conn.close()
+  auth_token=response.getheader('X-Subject-Token')
+  return auth_token
+
+# Function: get tenant id
+# Return the tenant id
+def pvcmd_get_tenant_id(host, headers, user, password):
+  all_tenants=call_api("GET",host, "/powervc/openstack/identity/v3/projects",headers,"",200,0)
+  tenant_id=all_tenants["projects"][0]["id"]
+  return tenant_id
+
+# Function: print help
+def pvcmd_print_help():
+  print "pvcmkvm -f <file> -p <powervc_url> -u <user> -P <password>"
+  sys.exit(0)
+
+def main(argv):
+  # Openstack and PowerVC rest API url
+  powervc_image="/powervc/openstack/compute/v2/<TENANT_ID>/images"
+  powervc_network="/powervc/openstack/network/v2.0/networks"
+  powervc_placement="/powervc/openstack/compute/v2/<TENANT_ID>/os-aggregates"
+  powervc_storage_template="/powervc/openstack/volume/v2/<TENANT_ID>/types"
+  powervc_tenant="/powervc/openstack/identity/v2.0/tenants"
+  powervc_server="/powervc/openstack/compute/v2/<TENANT_ID>/servers"
+  powervc_volume_v1="/powervc/openstack/volume/v1/<TENANT_ID>/volumes"
+  powervc_volume_v2="/powervc/openstack/volume/v2/<TENANT_ID>/volumes"
+  powervc_image="/powervc/openstack/compute/v2/<TENANT_ID>/images"
+
+  auth_headers={"Vary": "X-Auth-Token, X-Subject-Token", "Content-Type":"application/json", "Accept":"application/json"}
+
+  try:
+    opts, args=getopt.getopt(argv,"f:h:p:P:u:")
+  except getopt.GetoptError as err:
+    print 'pvcmd -f <file>'
+    print str(err)
+    sys.exit(2)
+  for opt, arg in opts:
+    if opt in ("-h", "--help"):
+      pvcmd_print_help()
+    elif opt in ("-f", "--file"):
+      file=arg
+    elif opt in ("-p"):
+      powervc_url=arg
+    elif opt in ("-P"):
+      password=arg
+    elif opt in ("-u"):
+      user=arg
+
+    
+  for line in open(file):
+    stanza=line.split(':')
+    if ( stanza[0] == "name" ):
+      f_name=stanza[1].rstrip()
+    elif ( stanza[0] == "ip_address" ):
+      f_ip=stanza[1].rstrip()
+    elif ( stanza[0] == "vlan" ):
+      f_vlan=stanza[1].rstrip()
+    elif ( stanza[0] == "target_host" ):
+      f_host=stanza[1].rstrip()
+    elif ( stanza[0] == "image" ):
+      f_image=stanza[1].rstrip()
+    elif ( stanza[0] == "storage_connectivity_group" ):
+      f_scg=stanza[1].rstrip()
+    elif ( stanza[0] == "virtual_processor" ):
+      f_vp=stanza[1].rstrip()
+    elif ( stanza[0] == "entitled_capacity" ):
+      f_ec=stanza[1].rstrip()
+    elif ( stanza[0] == "memory" ):
+      f_mem=stanza[1].rstrip()
+    elif ( stanza[0] == "storage_template" ):
+      f_st=stanza[1].rstrip()
+
+  print "name:",f_name.rstrip()
+  print "ip_address:",f_ip.rstrip()
+  print "vlan:",f_vlan.rstrip()
+  print "target_host:",f_host.rstrip()
+  print "image:",f_image.rstrip()
+  print "storage_connectivity_group:",f_scg.rstrip()
+  print "virtual_processor:",f_vp.rstrip()
+  print "entitled_capacity:",f_ec.rstrip()
+  print "memory:",f_mem.rstrip()
+  print "storage_template:",f_st.rstrip()
+
+  # Getting the token and building the header with the token
+  token=pvcmd_authenticate(powervc_url,auth_headers,user,password)
+  auth_headers_tok={"X-Auth-Token":token, "Content-Type":"application/json", "Accept":"application/json"}
+  # Retrieving the tenant id this one will be utilized in the script
+  tenant_id=pvcmd_get_tenant_id(powervc_url,auth_headers_tok,user,password)
+
+  # Replacing the tenant id in needed API url
+  powervc_image_replaced=powervc_image.replace("<TENANT_ID>",tenant_id)
+  powervc_server_replaced=powervc_server.replace("<TENANT_ID>",tenant_id)
+  powervc_placement_replaced=powervc_placement.replace("<TENANT_ID>",tenant_id)
+  powervc_storage_template_replaced=powervc_storage_template.replace("<TENANT_ID>",tenant_id)
+  powervc_volume_v2="/powervc/openstack/volume/v2/<TENANT_ID>/volumes"
+
+  # Image and network ID are needed to create a VM
+  # Searching the image ID
+  all_images=call_api("GET",powervc_url,powervc_image_replaced,auth_headers_tok,"",200,0)
+  for a_image in all_images["images"]:
+    if a_image["name"] == f_image.rstrip():
+      image_id=a_image["id"]
+      print "[info] found image",f_image.rstrip(),"with id",image_id
+
+  # Searching the network ID
+  all_networks=call_api("GET", powervc_url, powervc_network, auth_headers_tok,"",200,0)
+  for a_network in all_networks["networks"]:
+    if a_network["name"] == f_vlan.rstrip():
+      network_id=a_network["id"]
+      print "[info] found network",f_vlan.rstrip(),"with id",network_id
+
+  # Searching for placement
+  all_aggr=call_api("GET", powervc_url,powervc_placement_replaced, auth_headers_tok,"",200,0)
+  for a_aggr in all_aggr["aggregates"]:
+    if a_aggr["name"] == f_host.rstrip():
+      host_aggregate_id=a_aggr["id"]
+      print "[info] found host aggregation",f_host.rstrip(),"with id",host_aggregate_id
+
+  # Searching for storage template
+  all_templates=call_api("GET",powervc_url,powervc_storage_template_replaced,auth_headers_tok,"",200,0)
+  for a_template in all_templates["volume_types"]:
+    if a_template["extra_specs"]["drivers:display_name"] == f_st.rstrip():
+      st_id=a_template["id"]
+      print "[info] found storage template",f_st.rstrip(),"with id",st_id
+
+  # JSON Body for server creation
+  json_body_mkvm={ "server": { "flavor": { "OS-FLV-EXT-DATA:ephemeral": 10, "disk": 60, "extra_specs": { "powervm:proc_units": 0.1, "powervm:min_proc_units": 0.1, "powervm:max_proc_units": 1, "powervm:min_vcpu": 1, "powervm:max_vcpu": 1, "powervm:min_mem": 1024, "powervm:max_mem": 1024, "powervm:storage_connectivity_group": "<SCG>" }, "ram": 1024, "vcpus": 1 }, "imageRef": "<IMAGE_ID>", "max_count": 1,"name": "<NAME>","networkRef": "<NETWORK_ID>","networks": [ { "fixed_ip": "<IP>", "uuid": "<NETWORK_ID>" } ]},"os:scheduler_hints":{"host_aggregate_id":"99"}}
+
+  # Searching for volume in images and adding it to the json body
+  all_vols=""
+  powervc_image_replaced=powervc_image.replace("<TENANT_ID>",tenant_id)
+  all_images=call_api("GET",powervc_url, powervc_image_replaced,auth_headers_tok,"",200,0)
+  for a_image in all_images["images"]:
+    if a_image["name"] == f_image.rstrip():
+      image_id=a_image["id"]
+      print "[info] found image",f_image.rstrip(),"with id",image_id
+      image_detail=call_api("GET",powervc_url,powervc_image_replaced+"/"+a_image["id"],auth_headers_tok,"",200,0)
+      for a_vol in image_detail["image"]["metadata"]["block_device_mapping"]:
+        print "[info] found a volume with id",a_vol["volume_id"]
+        # Here is the tricky part :-)
+        json_body_mkvm["server"]["flavor"]["extra_specs"]["powervm:image_volume_type_"+a_vol["volume_id"]]=st_id
+
+  # Replacing values in body
+  # -- Setting image 
+  json_body_mkvm["server"]["imageRef"]=image_id
+  # -- Setting network
+  json_body_mkvm["server"]["networkRef"]=network_id
+  # -- Setting vmname
+  json_body_mkvm["server"]["name"]=f_name
+  # -- Setting ip_address
+  json_body_mkvm["server"]["networks"][0]["fixed_ip"]=f_ip
+  # -- Setting network_id
+  json_body_mkvm["server"]["networks"][0]["uuid"]=network_id
+  # -- Setting entitled capacity
+  json_body_mkvm["server"]["flavor"]["extra_specs"]["powervm:proc_units"]=float(f_ec)
+  # -- Setting max entitled capacity
+  json_body_mkvm["server"]["flavor"]["extra_specs"]["powervm:min_proc_units"]=0.1
+  # -- Setting min entitled capacity
+  json_body_mkvm["server"]["flavor"]["extra_specs"]["powervm:max_proc_units"]=32
+  # -- Setting min virtual processor
+  json_body_mkvm["server"]["flavor"]["extra_specs"]["powervm:min_vcpu"]=1
+  # -- Setting max virtual processor
+  json_body_mkvm["server"]["flavor"]["extra_specs"]["powervm:max_vcpu"]=32
+  # -- Setting min memory
+  json_body_mkvm["server"]["flavor"]["extra_specs"]["powervm:min_mem"]=1024
+  # -- Setting storage connectivity group
+  json_body_mkvm["server"]["flavor"]["extra_specs"]["powervm:storage_connectivity_group"]=f_scg
+  # -- Setting max memory (these rules are not my choice, kill me now)
+  if (f_mem <= 65536):
+    json_body_mkvm["server"]["flavor"]["extra_specs"]["powervm:max_mem"]=int(int(f_mem)+(16*1024))
+  if (f_mem > 65536) and (f_mem <= 131072 ):
+    json_body_mkvm["server"]["flavor"]["extra_specs"]["powervm:max_mem"]=int(int(f_mem)+(32*1024))
+  if (f_mem > 131072) and (f_mem <= 196608 ):
+    json_body_mkvm["server"]["flavor"]["extra_specs"]["powervm:max_mem"]=int(int(f_mem)+(48*1024))
+  if (f_mem > 196608 ):
+    json_body_mkvm["server"]["flavor"]["extra_specs"]["powervm:max_mem"]=int(int(f_mem)+(64*1024))
+  # -- Setting host_aggregate
+  json_body_mkvm["os:scheduler_hints"]["host_aggregate_id"]=host_aggregate_id
+  # -- Setting memory
+  json_body_mkvm["server"]["flavor"]["ram"]=int(f_mem)
+  # -- Setting virtual processor
+  json_body_mkvm["server"]["flavor"]["vcpus"]=int(f_vp)
+
+  create_vm=call_api("POST",powervc_url,powervc_server_replaced,auth_headers_tok,json.dumps(json_body_mkvm),200,0)
+  print create_vm
+
+if __name__ == "__main__":
+  main(sys.argv[1:])
