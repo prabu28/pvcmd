@@ -32,6 +32,8 @@ storage_template:svc
 * -f: file describing the Virtual machine
   + name: the hostname of the virtual machine
   + ip_address: the ip address of the virtual machine
+  + vlan: the vlan id name of network 
+  + target_host: host group of hosts
   + image: the image used for deployement
   + storage_connectivity_group: PowerVC storage connectivity group
   + virtual_processor: number of desired virtual processor (min and max are calculated in the script)
