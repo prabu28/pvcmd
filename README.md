@@ -20,6 +20,7 @@ The goal of pvcmkvm is to create a virtual machine on PowerVC
 name:myvm
 ip_address:10.10.10.2
 vlan:vlan666
+target_host:Default Group
 image:aix7100-03-05-chef
 storage_connectivity_group:npiv_4ports
 virtual_processor:1
